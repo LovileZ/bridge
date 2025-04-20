@@ -24,42 +24,76 @@ def connect_to(chain):
 
 # Deploy contract from JSON file with ABI and bytecode
 def deploy_contract(w3, contract_file, admin_address):
-    # Load contract JSON
-    with open(contract_file, 'r') as file:
-        contract_json = json.load(file)
-        bytecode = contract_json['data']['bytecode']['object']
-        abi = contract_json['abi']
-    
-    # Use the provided account info
-    warden_address = ACCOUNT_ADDRESS
-    private_key = PRIVATE_KEY
-    
-    print(f"Using account: {warden_address}")
-    print("This account should be funded with testnet tokens")
-    
-    # Deploy contract
-    contract = w3.eth.contract(abi=abi, bytecode=bytecode)
-    
-    # Prepare transaction
-    construct_txn = contract.constructor(admin_address).build_transaction({
-        'from': warden_address,
-        'nonce': w3.eth.get_transaction_count(warden_address),
-        'gas': 3000000,
-        'gasPrice': w3.eth.gas_price
-    })
-    
-    # Sign and send transaction
-    signed = w3.eth.account.sign_transaction(construct_txn, private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)  # Changed from rawTransaction
-    
-    # Wait for transaction receipt
-    print(f"Waiting for transaction {tx_hash.hex()} to be mined...")
-    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-    contract_address = tx_receipt.contractAddress
-    
-    print(f"Contract deployed at: {contract_address}")
-    
-    return contract_address, abi, private_key, warden_address
+    try:
+        # Load contract JSON
+        with open(contract_file, 'r') as file:
+            contract_json = json.load(file)
+            bytecode = contract_json['data']['bytecode']['object']
+            abi = contract_json['abi']
+        
+        # Verify contract JSON contents
+        if not bytecode or not abi:
+            print(f"Error: Invalid contract file {contract_file}")
+            print(f"Bytecode present: {bool(bytecode)}")
+            print(f"ABI present: {bool(abi)}")
+            return None, None, None, None
+        
+        # Use the provided account info
+        warden_address = ACCOUNT_ADDRESS
+        private_key = PRIVATE_KEY
+        
+        print(f"Using account: {warden_address}")
+        print("This account should be funded with testnet tokens")
+        
+        # Deploy contract with error handling
+        try:
+            contract = w3.eth.contract(abi=abi, bytecode=bytecode)
+            
+            # Get current nonce and gas price
+            nonce = w3.eth.get_transaction_count(warden_address)
+            gas_price = w3.eth.gas_price
+            
+            print(f"Current nonce: {nonce}")
+            print(f"Gas price: {gas_price}")
+            
+            # Prepare transaction
+            construct_txn = contract.constructor(admin_address).build_transaction({
+                'from': warden_address,
+                'nonce': nonce,
+                'gas': 3000000,
+                'gasPrice': gas_price
+            })
+            
+            # Sign and send transaction
+            signed = w3.eth.account.sign_transaction(construct_txn, private_key)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            
+            # Wait for transaction receipt with timeout
+            print(f"Waiting for transaction {tx_hash.hex()} to be mined...")
+            tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            
+            if tx_receipt.status != 1:
+                print(f"Contract deployment failed. Transaction status: {tx_receipt.status}")
+                return None, None, None, None
+                
+            contract_address = tx_receipt.contractAddress
+            print(f"Contract deployed at: {contract_address}")
+            
+            # Verify contract code was deployed
+            deployed_code = w3.eth.get_code(contract_address)
+            if deployed_code == b'':
+                print("Warning: No contract code found at deployed address")
+                return None, None, None, None
+                
+            return contract_address, abi, private_key, warden_address
+            
+        except Exception as e:
+            print(f"Error during contract deployment: {str(e)}")
+            return None, None, None, None
+            
+    except Exception as e:
+        print(f"Error loading contract file: {str(e)}")
+        return None, None, None, None
 
 # Deploy bridge contracts
 def deploy_bridge_contracts():
@@ -70,28 +104,27 @@ def deploy_bridge_contracts():
     # Check connections
     if not source_w3.is_connected() or not dest_w3.is_connected():
         print("Failed to connect to one or both networks")
-        return
+        return None
     
     print("Connected to both networks")
     
-    # Use the same account as admin and warden
-    admin_address = ACCOUNT_ADDRESS
-    admin_key = PRIVATE_KEY
-    print(f"Using account for admin: {admin_address}")
-    print("Make sure this account is funded on both networks")
-    input("Press Enter to continue...")
-    
     # Deploy source contract
     print("\nDeploying Source contract...")
-    source_address, source_abi, source_key, source_warden = deploy_contract(
-        source_w3, 'Source.json', admin_address
-    )
+    source_result = deploy_contract(source_w3, 'Source.json', ACCOUNT_ADDRESS)
+    if None in source_result:
+        print("Source contract deployment failed")
+        return None
+    
+    source_address, source_abi, source_key, source_warden = source_result
     
     # Deploy destination contract
     print("\nDeploying Destination contract...")
-    dest_address, dest_abi, dest_key, dest_warden = deploy_contract(
-        dest_w3, 'Destination.json', admin_address
-    )
+    dest_result = deploy_contract(dest_w3, 'Destination.json', ACCOUNT_ADDRESS)
+    if None in dest_result:
+        print("Destination contract deployment failed")
+        return None
+        
+    dest_address, dest_abi, dest_key, dest_warden = dest_result
     
     # Save contract_info.json for the autograder with only address and ABI
     contract_info = {
@@ -120,8 +153,8 @@ def deploy_bridge_contracts():
             "private_key": dest_key
         },
         "admin": {
-            "address": admin_address,
-            "private_key": admin_key
+            "address": ACCOUNT_ADDRESS,
+            "private_key": PRIVATE_KEY
         }
     }
     
@@ -146,13 +179,13 @@ def deploy_bridge_contracts():
     grant_tx = source_contract.functions.grantRole(
         warden_role, source_warden
     ).build_transaction({
-        'from': admin_address,
-        'nonce': source_w3.eth.get_transaction_count(admin_address),
+        'from': ACCOUNT_ADDRESS,
+        'nonce': source_w3.eth.get_transaction_count(ACCOUNT_ADDRESS),
         'gas': 200000,
         'gasPrice': source_w3.eth.gas_price
     })
     
-    signed_tx = source_w3.eth.account.sign_transaction(grant_tx, admin_key)
+    signed_tx = source_w3.eth.account.sign_transaction(grant_tx, PRIVATE_KEY)
     tx_hash = source_w3.eth.send_raw_transaction(signed_tx.raw_transaction)  # Changed from rawTransaction
     receipt = source_w3.eth.wait_for_transaction_receipt(tx_hash)
     
@@ -165,13 +198,13 @@ def deploy_bridge_contracts():
     grant_tx = dest_contract.functions.grantRole(
         warden_role, dest_warden
     ).build_transaction({
-        'from': admin_address,
-        'nonce': dest_w3.eth.get_transaction_count(admin_address),
+        'from': ACCOUNT_ADDRESS,
+        'nonce': dest_w3.eth.get_transaction_count(ACCOUNT_ADDRESS),
         'gas': 200000,
         'gasPrice': dest_w3.eth.gas_price
     })
     
-    signed_tx = dest_w3.eth.account.sign_transaction(grant_tx, admin_key)
+    signed_tx = dest_w3.eth.account.sign_transaction(grant_tx, PRIVATE_KEY)
     tx_hash = dest_w3.eth.send_raw_transaction(signed_tx.raw_transaction)  # Changed from rawTransaction
     receipt = dest_w3.eth.wait_for_transaction_receipt(tx_hash)
     
