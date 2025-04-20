@@ -1,40 +1,61 @@
 from web3 import Web3
 from web3.providers.rpc import HTTPProvider
-from web3.middleware import ExtraDataToPOAMiddleware #Necessary for POA chains
+from web3.middleware import ExtraDataToPOAMiddleware  # Necessary for POA chains
 from datetime import datetime
 import json
 import pandas as pd
 
-
+# Connect to networks
 def connect_to(chain):
-    if chain == 'source':  # The source contract chain is avax
-        api_url = f"https://api.avax-test.network/ext/bc/C/rpc" #AVAX C-chain testnet
-
-    if chain == 'destination':  # The destination contract chain is bsc
-        api_url = f"https://data-seed-prebsc-1-s1.binance.org:8545/" #BSC testnet
-
-    if chain in ['source','destination']:
-        w3 = Web3(Web3.HTTPProvider(api_url))
-        # inject the poa compatibility middleware to the innermost layer
-        w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+    if chain == 'source':  # AVAX C-chain testnet
+        api_url = "https://api.avax-test.network/ext/bc/C/rpc"
+    elif chain == 'destination':  # BSC testnet
+        api_url = "https://data-seed-prebsc-1-s1.binance.org:8545/"
+    
+    w3 = Web3(HTTPProvider(api_url))
+    # Inject the poa compatibility middleware to the innermost layer
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
+# Deploy contract
+def deploy_contract(w3, contract_file, *args):
+    # Load contract ABI and bytecode
+    with open(contract_file, 'r') as file:
+        contract_json = json.load(file)
+        abi = contract_json['abi']
+        bytecode = contract_json['bytecode']
+    
+    # Get account
+    account = w3.eth.account.create()
+    private_key = account.key.hex()
+    account_address = account.address
+    
+    print(f"Created account: {account_address}")
+    print(f"This account needs to be funded with testnet tokens")
+    input("Press Enter once the account is funded...")
+    
+    # Deploy contract
+    contract = w3.eth.contract(abi=abi, bytecode=bytecode)
+    
+    # Prepare transaction
+    construct_txn = contract.constructor(*args).build_transaction({
+        'from': account_address,
+        'nonce': w3.eth.get_transaction_count(account_address),
+        'gas': 3000000,
+        'gasPrice': w3.eth.gas_price
+    })
+    
+    # Sign and send transaction
+    signed = w3.eth.account.sign_transaction(construct_txn, private_key)
+    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+    
+    # Wait for transaction receipt
+    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    contract_address = tx_receipt.contractAddress
+    
+    return contract_address, abi, private_key, account_address
 
-def get_contract_info(chain, contract_info):
-    """
-        Load the contract_info file into a dictionary
-        This function is used by the autograder and will likely be useful to you
-    """
-    try:
-        with open(contract_info, 'r')  as f:
-            contracts = json.load(f)
-    except Exception as e:
-        print( f"Failed to read contract info\nPlease contact your instructor\n{e}" )
-        return 0
-    return contracts[chain]
-
-
-
+# Deploy bridge contracts
 def scan_blocks(chain, contract_info="contract_info.json"):
     """
         chain - (string) should be either "source" or "destination"
@@ -91,11 +112,9 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             
             # Call wrap function on destination chain
             try:
-                # Get the private key for the warden (you would need to set this up in your environment)
-                # For demonstration, assume a fixed account index, but you should manage this securely
-                warden_account = dest_w3.eth.accounts[0]  # This should be your warden account
+                # Use your account as the warden
+                warden_account = '0x86a11d271dA11aa145cAE9f8396b09Aa4C0530Bb'  # Your provided account address
                 
-                # You'll need to specify a gas price and limit appropriate for your destination chain
                 # Call the wrap function on the destination contract
                 tx = destination_contract.functions.wrap(
                     token,
@@ -109,9 +128,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
                 
                 # Sign and send the transaction
-                # Note: In production, you would need to securely manage the private key
-                # private_key = os.environ.get('WARDEN_PRIVATE_KEY')
-                private_key = 'your_private_key_here'  # Replace with actual private key or secure access method
+                private_key = '0x82429e0e75ae4201759386e760a55601f6280a8c025366f90f07460915dc2ff4'  # Your provided private key
                 signed_tx = dest_w3.eth.account.sign_transaction(tx, private_key)
                 tx_hash = dest_w3.eth.send_raw_transaction(signed_tx.rawTransaction)
                 
@@ -136,9 +153,10 @@ def scan_blocks(chain, contract_info="contract_info.json"):
             
             # Call withdraw function on source chain
             try:
-                # Get the private key for the warden (you would need to set this up in your environment)
+                # Use your account as the warden
+                warden_account = '0x86a11d271dA11aa145cAE9f8396b09Aa4C0530Bb'  # Your provided account address
+                
                 source_w3 = connect_to('source')
-                warden_account = source_w3.eth.accounts[0]  # This should be your warden account
                 
                 # Call the withdraw function on the source contract
                 tx = source_contract.functions.withdraw(
@@ -153,9 +171,7 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 })
                 
                 # Sign and send the transaction
-                # Note: In production, you would need to securely manage the private key
-                # private_key = os.environ.get('WARDEN_PRIVATE_KEY')
-                private_key = 'your_private_key_here'  # Replace with actual private key or secure access method
+                private_key = '0x82429e0e75ae4201759386e760a55601f6280a8c025366f90f07460915dc2ff4'  # Your provided private key
                 signed_tx = source_w3.eth.account.sign_transaction(tx, private_key)
                 tx_hash = source_w3.eth.send_raw_transaction(signed_tx.rawTransaction)
                 
@@ -167,4 +183,3 @@ def scan_blocks(chain, contract_info="contract_info.json"):
                 print(f"Error processing Unwrap event: {e}")
     
     return 1
-    
