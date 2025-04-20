@@ -21,18 +21,44 @@ contract Source is AccessControl {
 
     }
 
-	function deposit(address _token, address _recipient, uint256 _amount ) public {
-		//YOUR CODE HERE
-	}
+	function deposit(address _token, address _recipient, uint256 _amount) public {
+        // Check if the token is registered/approved
+        require(approved[_token], "Token not registered");
+        
+        // Transfer tokens from sender to this contract using transferFrom
+        ERC20 token = ERC20(_token);
+        bool success = token.transferFrom(msg.sender, address(this), _amount);
+        require(success, "Transfer failed");
+        
+        // Emit Deposit event
+        emit Deposit(_token, _recipient, _amount);
+    }
 
-	function withdraw(address _token, address _recipient, uint256 _amount ) onlyRole(WARDEN_ROLE) public {
-		//YOUR CODE HERE
-	}
+    function withdraw(address _token, address _recipient, uint256 _amount) onlyRole(WARDEN_ROLE) public {
+        // Function already has role check via modifier
+        
+        // Transfer tokens from this contract to recipient
+        ERC20 token = ERC20(_token);
+        bool success = token.transfer(_recipient, _amount);
+        require(success, "Transfer failed");
+        
+        // Emit Withdrawal event
+        emit Withdrawal(_token, _recipient, _amount);
+    }
 
-	function registerToken(address _token) onlyRole(ADMIN_ROLE) public {
-		//YOUR CODE HERE
-	}
-
+    function registerToken(address _token) onlyRole(ADMIN_ROLE) public {
+        // Function already has role check via modifier
+        
+        // Check that token isn't already registered
+        require(!approved[_token], "Token already registered");
+        
+        // Add token to approved mapping and tokens array
+        approved[_token] = true;
+        tokens.push(_token);
+        
+        // Emit Registration event
+        emit Registration(_token);
+    }
 
 }
 
